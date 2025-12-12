@@ -6,7 +6,7 @@ Semantic Duplicate Detection and Consolidation for Databricks Unity Catalog
 
 `lineage_ops` is a tool designed to detect semantically duplicate tables within a Databricks Unity Catalog environment. It identifies tables that have different names but contain essentially the same data, enabling organizations to consolidate redundant tables into a single Source of Truth (SoT).
 
-![plot](./main_iamge.png)
+![plot](https://github.com/hurcy/lineage_ops/blob/main/main_image.png)
 
 
 ## Features
