@@ -1,0 +1,14 @@
+# The main pipeline for lineage_ops
+resources:
+  pipelines:
+    lineage_ops_pipeline:
+      name: lineage_ops_pipeline
+      catalog: main
+      schema: lineage_ops_${bundle.target}
+      serverless: true
+      libraries:
+        - notebook:
+            path: ../src/dlt_pipeline.ipynb
+
+      configuration:
+        bundle.sourcePath: ${workspace.file_path}/src
