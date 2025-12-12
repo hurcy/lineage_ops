@@ -38,7 +38,6 @@ lineage_ops/
 │   ├── lineage_ops.job.yml    # Databricks job definition
 │   └── lineage_ops.pipeline.yml # DLT pipeline definition
 ├── tests/
-│   └── main_test.py           # Unit tests
 ├── databricks.yml             # Databricks Asset Bundle config
 ├── requirements-dev.txt       # Development dependencies
 └── setup.py                   # Package setup

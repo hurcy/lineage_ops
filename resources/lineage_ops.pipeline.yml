@@ -3,7 +3,7 @@ resources:
   pipelines:
     lineage_ops_pipeline:
       name: lineage_ops_pipeline
-      catalog: main
+      catalog: hurcy
       schema: lineage_ops_${bundle.target}
       serverless: true
       libraries:
