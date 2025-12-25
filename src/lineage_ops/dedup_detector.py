@@ -134,16 +134,13 @@ class SemanticDuplicateDetector:
             if self._common_ancestors_df is None:
                 self.find_common_ancestors()
             
-            tables_a = [
-                row["table_a"] 
-                for row in self._common_ancestors_df.select("table_a").distinct().collect()
-            ]
-            tables_b = [
-                row["table_b"] 
-                for row in self._common_ancestors_df.select("table_b").distinct().collect()
-            ]
-            table_names = list(set(tables_a + tables_b))
-            print(table_names[:10])
+            # Collect both columns in one action instead of two separate collects
+            table_pairs = self._common_ancestors_df.select("table_a", "table_b").distinct().collect()
+            table_names = list(set(
+                [row["table_a"] for row in table_pairs] + 
+                [row["table_b"] for row in table_pairs]
+            ))
+            print(f"Tables to analyze: {len(table_names)}, sample: {table_names[:10]}")
         self._schema_texts_df = self.schema_extractor.get_bulk_schema_texts(table_names)
         return self._schema_texts_df
     

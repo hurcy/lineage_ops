@@ -247,10 +247,11 @@ class SchemaExtractor:
         table_df.createOrReplaceTempView("target_tables")
         
         # Bulk query column info for all target tables
-        # Note: This query may need to be split by catalog
+        # Group tables by catalog for efficient querying
         catalogs = set(name.split(".")[0] for name in table_names)
         
-        all_columns = None
+        # Build single UNION ALL query for all catalogs (more efficient than sequential unions)
+        union_queries = []
         for catalog in catalogs:
             query = f"""
             SELECT 
@@ -263,16 +264,14 @@ class SchemaExtractor:
             INNER JOIN target_tables t 
                 ON CONCAT(c.TABLE_CATALOG, '.', c.TABLE_SCHEMA, '.', c.TABLE_NAME) = t.full_table_name
             """
-            
-            catalog_columns = self.spark.sql(query)
-            
-            if all_columns is None:
-                all_columns = catalog_columns
-            else:
-                all_columns = all_columns.union(catalog_columns)
+            union_queries.append(f"({query})")
         
-        if all_columns is None:
+        if not union_queries:
             return self.spark.createDataFrame([], "full_table_name STRING, schema_text STRING")
+        
+        # Execute as single query with UNION ALL
+        combined_query = " UNION ALL ".join(union_queries)
+        all_columns = self.spark.sql(combined_query)
         
         # Generate schema text
         schema_texts = (

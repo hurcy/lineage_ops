@@ -30,18 +30,31 @@ class SimilarityAnalyzer:
     def compute_cosine_similarity(
         self, 
         embeddings_df: DataFrame,
-        similarity_threshold: float = 0.8
+        similarity_threshold: float = 0.8,
+        max_tables_for_crossjoin: int = 500
     ) -> DataFrame:
         """
         Compute cosine similarity for all table pairs.
         
+        WARNING: This uses crossJoin which is O(n²). For large datasets (>500 tables),
+        use compute_similarity_with_lsh() instead.
+        
         Args:
             embeddings_df: DataFrame with full_table_name, embedding columns
             similarity_threshold: Similarity threshold (return pairs above this)
+            max_tables_for_crossjoin: Maximum tables before warning (default 500)
             
         Returns:
             DataFrame: Similar table pairs with similarity scores
         """
+        # Cache DataFrame to avoid multiple scans
+        table_count = embeddings_df.count()
+        
+        if table_count > max_tables_for_crossjoin:
+            print(f"WARNING: {table_count} tables detected. crossJoin will create "
+                  f"{table_count * (table_count - 1) // 2:,} pairs. "
+                  f"Consider using compute_similarity_with_lsh() for better performance.")
+        
         # UDF for cosine similarity calculation
         @F.udf(T.FloatType())
         def cosine_similarity(v1: DenseVector, v2: DenseVector) -> float:
@@ -122,7 +135,7 @@ class SimilarityAnalyzer:
             embeddings_df.select("full_table_name", "embedding"),
             embeddings_df.select(
                 F.col("full_table_name").alias("full_table_name_2"),
-                F.col("embedding").alias("embedding_2")
+                F.col("embedding")  # Keep column name as "embedding" for LSH model
             ),
             threshold=distance_threshold,
             distCol="euclidean_distance"

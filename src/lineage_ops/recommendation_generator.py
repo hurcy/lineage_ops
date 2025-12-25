@@ -514,38 +514,58 @@ class RecommendationGenerator:
         Returns:
             DataFrame: DataFrame with consolidation recommendations
         """
-        # Collect all related tables
-        tables_a = [row["table_a"] for row in candidates_df.select("table_a").distinct().collect()]
-        tables_b = [row["table_b"] for row in candidates_df.select("table_b").distinct().collect()]
-        all_tables = list(set(tables_a + tables_b))
+        # Collect candidates once and extract all unique tables in one pass
+        candidates_rows = candidates_df.collect()
+        all_tables = list(set(
+            [row["table_a"] for row in candidates_rows] + 
+            [row["table_b"] for row in candidates_rows]
+        ))
         
-        # Batch collect statistics
-        usage_stats = self.usage_analyzer.get_table_usage_stats(all_tables)
-        creation_info = self.usage_analyzer.get_table_creation_info(all_tables)
+        # Batch collect statistics and convert to dictionaries for O(1) lookup
+        usage_stats_df = self.usage_analyzer.get_table_usage_stats(all_tables)
+        creation_info_df = self.usage_analyzer.get_table_creation_info(all_tables)
         
-        # Generate recommendations for each candidate
+        # Convert DataFrames to dictionaries once (avoid N filter operations)
+        usage_stats_dict = {
+            row["full_table_name"]: row.asDict() 
+            for row in usage_stats_df.collect()
+        }
+        creation_info_dict = {
+            row["table_name"]: row.asDict() 
+            for row in creation_info_df.collect()
+        }
+        
+        # Batch compute storage sizes for all duplicate candidates
+        # (will be determined after SoT decision, so we pre-compute for all tables)
+        storage_sizes = {}
+        for table in all_tables:
+            storage_sizes[table] = self.cost_estimator.estimate_storage_size(table)
+        
+        # Generate recommendations for each candidate (using dict lookups, no Spark actions)
         recommendations = []
-        for row in candidates_df.collect():
-            sot_decision = self.determine_sot(
+        for row in candidates_rows:
+            sot_decision = self._determine_sot_from_dict(
                 row["table_a"],
                 row["table_b"],
-                usage_stats,
-                creation_info
+                usage_stats_dict,
+                creation_info_dict
             )
             
-            cost_estimation = self.cost_estimator.estimate_savings(
+            cost_estimation = self._estimate_savings_from_dict(
                 sot_decision["duplicate_table"],
                 sot_decision["sot_table"],
-                usage_stats
+                usage_stats_dict,
+                storage_sizes
             )
             
-            common_ancestors = row.get("common_sources", [])
+            common_ancestors = getattr(row, "common_sources", None) or []
             if common_ancestors:
                 common_ancestors = list(common_ancestors)
             
+            similarity = getattr(row, "cosine_similarity", None) or getattr(row, "combined_score", None) or 0
             comment = self._generate_comment(
                 sot_decision,
-                row.get("cosine_similarity", 0) or row.get("combined_score", 0),
+                similarity,
                 common_ancestors,
                 cost_estimation
             )
@@ -555,9 +575,9 @@ class RecommendationGenerator:
                 "table_b": row["table_b"],
                 "sot_table": sot_decision["sot_table"],
                 "duplicate_table": sot_decision["duplicate_table"],
-                "similarity_score": float(row.get("cosine_similarity", 0) or 0),
-                "combined_score": float(row.get("combined_score", 0) or 0),
-                "confidence_level": row.get("confidence_level", sot_decision["confidence"]),
+                "similarity_score": float(getattr(row, "cosine_similarity", None) or 0),
+                "combined_score": float(getattr(row, "combined_score", None) or 0),
+                "confidence_level": getattr(row, "confidence_level", None) or sot_decision["confidence"],
                 "recommendation": comment,
                 "monthly_dbu_savings_usd": cost_estimation.estimated_dbu_savings_per_month,
                 "storage_savings_gb": cost_estimation.storage_savings_gb,
@@ -580,6 +600,128 @@ class RecommendationGenerator:
         ])
         
         return self.spark.createDataFrame(recommendations, schema)
+    
+    def _determine_sot_from_dict(
+        self,
+        table_a: str,
+        table_b: str,
+        usage_stats_dict: Dict[str, Dict],
+        creation_info_dict: Dict[str, Dict]
+    ) -> Dict[str, Any]:
+        """
+        Determine the SoT using pre-collected dictionaries (no Spark actions).
+        """
+        stats_a = usage_stats_dict.get(table_a)
+        stats_b = usage_stats_dict.get(table_b)
+        
+        score_a = 0
+        score_b = 0
+        reasons = []
+        
+        # Compare read frequency
+        if stats_a and stats_b:
+            read_a = stats_a.get("read_count", 0) or 0
+            read_b = stats_b.get("read_count", 0) or 0
+            if read_a > read_b:
+                score_a += 2
+                reasons.append(f"{table_a} has more reads ({read_a} vs {read_b})")
+            elif read_b > read_a:
+                score_b += 2
+                reasons.append(f"{table_b} has more reads ({read_b} vs {read_a})")
+            
+            # Compare recent updates
+            last_write_a = stats_a.get("last_write")
+            last_write_b = stats_b.get("last_write")
+            if last_write_a and last_write_b:
+                if last_write_a > last_write_b:
+                    score_a += 1
+                    reasons.append(f"{table_a} was updated more recently")
+                else:
+                    score_b += 1
+                    reasons.append(f"{table_b} was updated more recently")
+        
+        # Compare creation date (older is more stable)
+        creation_a = creation_info_dict.get(table_a)
+        creation_b = creation_info_dict.get(table_b)
+        
+        if creation_a and creation_b:
+            created_at_a = creation_a.get("created_at")
+            created_at_b = creation_b.get("created_at")
+            if created_at_a and created_at_b:
+                if created_at_a < created_at_b:
+                    score_a += 1
+                    reasons.append(f"{table_a} is older (established)")
+                else:
+                    score_b += 1
+                    reasons.append(f"{table_b} is older (established)")
+        
+        # Make decision
+        if score_a > score_b:
+            sot = table_a
+            duplicate = table_b
+        elif score_b > score_a:
+            sot = table_b
+            duplicate = table_a
+        else:
+            # Tie-breaker: alphabetical order
+            sot = min(table_a, table_b)
+            duplicate = max(table_a, table_b)
+            reasons.append("Tie-breaker: alphabetical order")
+        
+        return {
+            "sot_table": sot,
+            "duplicate_table": duplicate,
+            "reasons": reasons,
+            "confidence": "HIGH" if abs(score_a - score_b) >= 2 else "MEDIUM" if abs(score_a - score_b) >= 1 else "LOW"
+        }
+    
+    def _estimate_savings_from_dict(
+        self,
+        duplicate_table: str,
+        sot_table: str,
+        usage_stats_dict: Dict[str, Dict],
+        storage_sizes: Dict[str, float]
+    ) -> CostEstimation:
+        """
+        Estimate savings using pre-collected dictionaries (no Spark actions).
+        """
+        stats = usage_stats_dict.get(duplicate_table)
+        
+        if not stats:
+            monthly_dbu_cost = 0.0
+            job_count = 0
+        else:
+            # Estimate DBU cost based on monthly write operations
+            writes_per_month = (stats.get("write_count", 0) or 0) * (30 / 90)
+            estimated_dbu_per_month = writes_per_month * self.cost_estimator.AVERAGE_JOB_DURATION_HOURS * 4
+            monthly_dbu_cost = estimated_dbu_per_month * self.cost_estimator.dbu_cost
+            job_count = stats.get("total_job_count", 0) or 0
+        
+        storage_gb = storage_sizes.get(duplicate_table, 0.0)
+        
+        # Determine confidence level
+        if job_count > 0 and storage_gb > 0:
+            confidence = "HIGH"
+        elif job_count > 0 or storage_gb > 0:
+            confidence = "MEDIUM"
+        else:
+            confidence = "LOW"
+        
+        notes = []
+        if job_count == 0:
+            notes.append("No pipeline activity detected")
+        if storage_gb == 0:
+            notes.append("Storage size could not be determined")
+        
+        return CostEstimation(
+            duplicate_table=duplicate_table,
+            sot_table=sot_table,
+            estimated_dbu_savings_per_month=monthly_dbu_cost,
+            storage_savings_gb=storage_gb,
+            pipeline_count_to_remove=job_count,
+            confidence=confidence,
+            notes="; ".join(notes) if notes else "Estimation based on available data"
+        )
     
     def generate_summary_report(self, recommendations_df: DataFrame) -> Dict[str, Any]:
         """

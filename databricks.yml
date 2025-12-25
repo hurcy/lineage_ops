@@ -18,6 +18,11 @@ targets:
     default: true
     workspace:
       host: https://adb-984752964297111.11.azuredatabricks.net
+    permissions:
+      - user_name: cinyoung.hur@databricks.com
+        level: CAN_MANAGE
+      - user_name: allison.chau@databricks.com
+        level: CAN_MANAGE
 
   prod:
     mode: production
