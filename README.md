@@ -70,10 +70,10 @@ pip install -e src/
 ### Basic Usage
 
 ```python
-from lineage_ops.dedup_detector import SemanticDuplicateDetector, DedupConfig
+from lineage_ops.dedup_detector import SemanticDuplicateDetector, LineageOpsConfig
 
 # Create configuration
-config = DedupConfig(
+config = LineageOpsConfig(
     catalog_filter="your_catalog",  # Target catalog to analyze
     days_back=30,                   # Lineage query period
     similarity_threshold=0.8,       # Minimum similarity score
@@ -114,7 +114,7 @@ embeddings_df = embedder.embed_schema_texts(schema_texts_df)
 
 # 4. Find similar tables
 analyzer = SimilarityAnalyzer(spark)
-similar_pairs = analyzer.compute_cosine_similarity(embeddings_df, threshold=0.8)
+similar_pairs = analyzer.compute_similarity_with_lsh(embeddings_df)
 
 # 5. Generate recommendations
 generator = RecommendationGenerator(spark)

@@ -1,0 +1,33 @@
+# The main job for lineage_ops.
+resources:
+  jobs:
+    lineage_ops_mlflow_job:
+      name: lineage_ops_mlflow_job
+
+      # trigger:
+      #   # Run this job every day, exactly one day from the last run; see https://docs.databricks.com/api/workspace/jobs/create#trigger
+      #   periodic:
+      #     interval: 1
+      #     unit: DAYS
+
+      #email_notifications:
+      #  on_failure:
+      #    - your_email@example.com
+
+      job_clusters:
+        - job_cluster_key: lineage_ops_cluster
+          new_cluster:
+            kind: CLASSIC_PREVIEW
+            spark_version: "17.3.x-scala2.13"
+            node_type_id: Standard_E16_v3
+            use_ml_runtime: true
+            num_workers: 8
+
+      tasks:
+        - task_key: notebook_task
+          job_cluster_key: lineage_ops_cluster
+          libraries:
+            - whl: ../dist/*.whl
+          notebook_task:
+            notebook_path: ../src/mlflow_notebook.ipynb
+

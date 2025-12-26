@@ -21,7 +21,7 @@ from .recommendation_generator import RecommendationGenerator
 
 
 @dataclass
-class DedupConfig:
+class LineageOpsConfig:
     """Duplicate detection configuration."""
     catalog_filter: Optional[str] = None
     days_back: int = 30
@@ -39,7 +39,7 @@ class SemanticDuplicateDetector:
     def __init__(
         self, 
         spark: SparkSession,
-        config: Optional[DedupConfig] = None
+        config: Optional[LineageOpsConfig] = None
     ):
         """
         Initialize SemanticDuplicateDetector.
@@ -49,7 +49,7 @@ class SemanticDuplicateDetector:
             config: Duplicate detection configuration
         """
         self.spark = spark
-        self.config = config or DedupConfig()
+        self.config = config or LineageOpsConfig()
         
         # Initialize components
         self.lineage_extractor = LineageExtractor(
@@ -262,7 +262,7 @@ class SemanticDuplicateDetector:
                 self._common_ancestors_df
                 .write
                 .mode(mode)
-                .saveAsTable(f"{base_path}.dedup_common_ancestors")
+                .saveAsTable(f"{base_path}.common_ancestors")
             )
         
         if self._candidates_df is not None:
@@ -272,7 +272,7 @@ class SemanticDuplicateDetector:
                 candidates_to_save
                 .write
                 .mode(mode)
-                .saveAsTable(f"{base_path}.dedup_candidates")
+                .saveAsTable(f"{base_path}.consolidation_candidates")
             )
         
         if self._recommendations_df is not None:
@@ -280,7 +280,7 @@ class SemanticDuplicateDetector:
                 self._recommendations_df
                 .write
                 .mode(mode)
-                .saveAsTable(f"{base_path}.dedup_recommendations")
+                .saveAsTable(f"{base_path}.consolidation_recommendations")
             )
 
 
@@ -305,7 +305,7 @@ def detect_semantic_duplicates(
         Dict: Analysis results
         
     Example:
-        >>> from dedup_lineage.src.dedup_detector import detect_semantic_duplicates
+        >>> from lineage_ops.src.detector import detect_semantic_duplicates
         >>> results = detect_semantic_duplicates(
         ...     spark,
         ...     catalog_filter="prod_catalog",
@@ -313,7 +313,7 @@ def detect_semantic_duplicates(
         ... )
         >>> results["results"]["recommendations"].display()
     """
-    config = DedupConfig(
+    config = LineageOpsConfig(
         catalog_filter=catalog_filter,
         similarity_threshold=similarity_threshold,
         days_back=days_back,

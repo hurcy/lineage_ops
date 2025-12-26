@@ -23,7 +23,7 @@ CREATE SCHEMA IF NOT EXISTS hurcy.silver COMMENT 'Cleaned and enriched data';
 CREATE SCHEMA IF NOT EXISTS hurcy.gold COMMENT 'Business-level aggregates';
 
 -- 4. 레거시 스키마 (중복 테이블 포함)
-CREATE SCHEMA IF NOT EXISTS hurcy.legacy COMMENT 'Legacy tables - candidates for dedup';
+CREATE SCHEMA IF NOT EXISTS hurcy.legacy COMMENT 'Legacy tables - candidates for consolidation';
 
 -- 5. 마트 스키마
 CREATE SCHEMA IF NOT EXISTS hurcy.mart COMMENT 'Data mart tables';
