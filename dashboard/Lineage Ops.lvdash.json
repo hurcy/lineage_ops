@@ -1,0 +1,93 @@
+{
+  "datasets": [
+    {
+      "name": "12270e9d",
+      "displayName": "table_viz_map",
+      "queryLines": [
+        "select * from hurcy.analysis.table_viz_map"
+      ]
+    }
+  ],
+  "pages": [
+    {
+      "name": "11f84901",
+      "displayName": "Table Clustering",
+      "layout": [
+        {
+          "widget": {
+            "name": "bf065d51",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "12270e9d",
+                  "fields": [
+                    {
+                      "name": "usage_score",
+                      "expression": "`usage_score`"
+                    },
+                    {
+                      "name": "full_table_name",
+                      "expression": "`full_table_name`"
+                    },
+                    {
+                      "name": "vis_x",
+                      "expression": "`vis_x`"
+                    },
+                    {
+                      "name": "vis_y",
+                      "expression": "`vis_y`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "scatter",
+              "encodings": {
+                "x": {
+                  "fieldName": "vis_x",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                },
+                "y": {
+                  "fieldName": "vis_y",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                },
+                "color": {
+                  "fieldName": "usage_score",
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                },
+                "extra": [
+                  {
+                    "fieldName": "full_table_name"
+                  }
+                ]
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 6,
+            "height": 11
+          }
+        }
+      ],
+      "pageType": "PAGE_TYPE_CANVAS"
+    }
+  ],
+  "uiSettings": {
+    "theme": {
+      "widgetHeaderAlignment": "ALIGNMENT_UNSPECIFIED"
+    },
+    "applyModeEnabled": false
+  }
+}

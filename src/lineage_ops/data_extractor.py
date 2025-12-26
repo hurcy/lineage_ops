@@ -2,12 +2,160 @@
 Data Extraction Module
 
 Extracts lineage and schema information from Unity Catalog system tables.
+Provides enriched metadata with Schema + Lineage + Usage for embedding.
 """
 
 from pyspark.sql import SparkSession, DataFrame
 from pyspark.sql import functions as F
 from pyspark.sql import Window
-from typing import Optional
+from typing import Optional, List
+
+
+class DataExtractor:
+    """
+    Unified data extractor that joins schema, lineage, and usage data.
+    
+    Creates enriched metadata suitable for hybrid embedding (Schema + Lineage + Usage).
+    """
+    
+    def __init__(self, spark: SparkSession, catalog_filter: Optional[str] = None):
+        """
+        Initialize DataExtractor.
+        
+        Args:
+            spark: SparkSession instance
+            catalog_filter: Filter for specific catalog (e.g., 'prod_catalog')
+        """
+        self.spark = spark
+        self.catalog_filter = catalog_filter
+    
+    def get_enriched_metadata(self, days_back: int = 30) -> DataFrame:
+        """
+        Extract and join metadata, lineage, and usage data for all tables.
+        
+        Creates a unified DataFrame with:
+        - Table metadata (name, comment)
+        - Column information (aggregated as text)
+        - Lineage context (parent tables as text)
+        - Usage score (access count from audit logs)
+        
+        Args:
+            days_back: Number of past days to query for lineage/usage
+            
+        Returns:
+            DataFrame: Enriched metadata with columns:
+                - full_table_name: catalog.schema.table
+                - tbl_comment: Table comment
+                - col_list: Comma-separated column names
+                - col_comments: Space-separated column comments
+                - lineage_context: Space-separated parent table names
+                - usage_score: Access count from audit logs
+        """
+        catalog_condition = ""
+        if self.catalog_filter:
+            catalog_condition = f"AND TABLE_CATALOG = '{self.catalog_filter}'"
+        
+        # 1. Get table metadata
+        tables_query = f"""
+        SELECT 
+            CONCAT(TABLE_CATALOG, '.', TABLE_SCHEMA, '.', TABLE_NAME) AS full_table_name,
+            TABLE_CATALOG,
+            TABLE_SCHEMA,
+            TABLE_NAME,
+            COMMENT AS tbl_comment
+        FROM system.information_schema.tables
+        WHERE TABLE_TYPE != 'VIEW'
+            {catalog_condition}
+        """
+        tables = self.spark.sql(tables_query)
+        tables.createOrReplaceTempView("_enriched_tables")
+        
+        # 2. Aggregate column information per table
+        cols_query = f"""
+        SELECT 
+            CONCAT(TABLE_CATALOG, '.', TABLE_SCHEMA, '.', TABLE_NAME) AS full_table_name,
+            CONCAT_WS(', ', COLLECT_LIST(COLUMN_NAME)) AS col_list,
+            CONCAT_WS(' ', COLLECT_LIST(COALESCE(COMMENT, ''))) AS col_comments
+        FROM system.information_schema.columns
+        WHERE 1=1 {catalog_condition}
+        GROUP BY TABLE_CATALOG, TABLE_SCHEMA, TABLE_NAME
+        """
+        columns_agg = self.spark.sql(cols_query)
+        
+        # 3. Aggregate lineage (parent tables) per target table
+        lineage_query = f"""
+        SELECT 
+            target_table_full_name AS full_table_name,
+            CONCAT_WS(' ', COLLECT_SET(source_table_full_name)) AS lineage_context
+        FROM system.access.table_lineage
+        WHERE event_time >= current_date() - INTERVAL {days_back} DAY
+            AND source_table_full_name IS NOT NULL
+            AND target_table_full_name IS NOT NULL
+        GROUP BY target_table_full_name
+        """
+        try:
+            lineage = self.spark.sql(lineage_query)
+        except Exception:
+            # Fallback if lineage table is not accessible
+            lineage = self.spark.createDataFrame([], "full_table_name STRING, lineage_context STRING")
+        
+        # 4. Aggregate usage from audit logs
+        audit_query = f"""
+        SELECT 
+            request_params['full_name_arg'] AS full_table_name,
+            COUNT(*) AS usage_score
+        FROM system.access.audit
+        WHERE event_time >= current_date() - INTERVAL {days_back} DAY
+            AND action_name IN ('getTable', 'readTable', 'writeTable')
+            AND request_params['full_name_arg'] IS NOT NULL
+        GROUP BY request_params['full_name_arg']
+        """
+        try:
+            usage = self.spark.sql(audit_query)
+        except Exception:
+            # Fallback if audit table is not accessible
+            usage = self.spark.createDataFrame([], "full_table_name STRING, usage_score LONG")
+        
+        # 5. Join all data
+        enriched = (
+            tables.alias("t")
+            .join(columns_agg.alias("c"), "full_table_name", "left")
+            .join(lineage.alias("l"), "full_table_name", "left")
+            .join(usage.alias("u"), "full_table_name", "left")
+            .select(
+                "t.full_table_name",
+                F.coalesce("t.tbl_comment", F.lit("")).alias("tbl_comment"),
+                F.coalesce("c.col_list", F.lit("")).alias("col_list"),
+                F.coalesce("c.col_comments", F.lit("")).alias("col_comments"),
+                F.coalesce("l.lineage_context", F.lit("")).alias("lineage_context"),
+                F.coalesce("u.usage_score", F.lit(0)).alias("usage_score")
+            )
+        )
+        
+        return enriched
+    
+    def create_signature_text(self, enriched_df: DataFrame) -> DataFrame:
+        """
+        Create signature text for embedding from enriched metadata.
+        
+        The signature combines table name, comment, columns, and lineage context
+        into a single text field suitable for embedding.
+        
+        Args:
+            enriched_df: DataFrame from get_enriched_metadata()
+            
+        Returns:
+            DataFrame: With additional 'signature' column for embedding
+        """
+        return enriched_df.withColumn(
+            "signature",
+            F.concat(
+                F.lit("Table: "), F.col("full_table_name"),
+                F.lit(" Comment: "), F.col("tbl_comment"),
+                F.lit(" Columns: "), F.col("col_list"),
+                F.lit(" Lineage Parents: "), F.col("lineage_context")
+            )
+        )
 
 
 class LineageExtractor:

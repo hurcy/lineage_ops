@@ -28,7 +28,7 @@ lineage_ops/
 │   │   ├── schema_embedder.py     # Generate schema embeddings
 │   │   ├── similarity_analyzer.py # Compute similarities and clustering
 │   │   ├── recommendation_generator.py # Generate consolidation recommendations
-│   │   └── dedup_detector.py      # Main orchestrator
+│   │   └── detector.py      # Main orchestrator
 │   ├── notebook.ipynb         # Interactive analysis notebook
 │   ├── dlt_pipeline.ipynb     # DLT pipeline example
 │   └── prepare_data/          # Test data setup
@@ -70,7 +70,7 @@ pip install -e src/
 ### Basic Usage
 
 ```python
-from lineage_ops.dedup_detector import SemanticDuplicateDetector, LineageOpsConfig
+from lineage_ops.main import SemanticDuplicateDetector, LineageOpsConfig
 
 # Create configuration
 config = LineageOpsConfig(
@@ -152,7 +152,7 @@ Generates consolidation recommendations:
 - Estimates DBU and storage cost savings
 - Produces human-readable recommendations
 
-### dedup_detector.py
+### detector.py
 
 Main orchestrator that integrates all components for end-to-end analysis.
 

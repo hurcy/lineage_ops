@@ -385,3 +385,201 @@ class DuplicateCandidateFinder:
         )
         
         return enriched
+
+
+class FastSimilarityAnalyzer:
+    """
+    Fast similarity analysis using numpy/sklearn instead of Spark.
+    
+    Suitable for datasets that fit in driver memory (up to ~100K tables).
+    Uses UMAP for 2D visualization and cosine similarity for fast comparison.
+    """
+    
+    def __init__(self, use_umap: bool = True, random_state: int = 42):
+        """
+        Initialize FastSimilarityAnalyzer.
+        
+        Args:
+            use_umap: Whether to use UMAP for dimensionality reduction
+            random_state: Random state for reproducibility
+        """
+        self.use_umap = use_umap
+        self.random_state = random_state
+        self._reducer = None
+    
+    def _get_umap_reducer(self, n_components: int = 2):
+        """Lazy load UMAP reducer."""
+        if self._reducer is None and self.use_umap:
+            import umap
+            self._reducer = umap.UMAP(
+                n_components=n_components,
+                metric='cosine',
+                random_state=self.random_state,
+                n_neighbors=15,
+                min_dist=0.1
+            )
+        return self._reducer
+    
+    def compute_umap_coordinates(
+        self,
+        embeddings: np.ndarray,
+        table_names: List[str]
+    ) -> "pd.DataFrame":
+        """
+        Reduce embeddings to 2D coordinates for visualization.
+        
+        Args:
+            embeddings: Numpy array of embeddings (N x dim)
+            table_names: List of table names
+            
+        Returns:
+            pd.DataFrame: DataFrame with vis_x, vis_y coordinates
+        """
+        import pandas as pd
+        
+        reducer = self._get_umap_reducer()
+        coords_2d = reducer.fit_transform(embeddings)
+        
+        return pd.DataFrame({
+            'full_table_name': table_names,
+            'vis_x': coords_2d[:, 0],
+            'vis_y': coords_2d[:, 1]
+        })
+    
+    def compute_fast_similarity(
+        self,
+        embeddings: np.ndarray,
+        table_names: List[str],
+        top_k: int = 5,
+        threshold: float = 0.0
+    ) -> "pd.DataFrame":
+        """
+        Compute cosine similarity using sklearn (much faster than Spark crossJoin).
+        
+        Args:
+            embeddings: Numpy array of embeddings (N x dim)
+            table_names: List of table names
+            top_k: Number of top similar tables to return per table
+            threshold: Minimum similarity threshold
+            
+        Returns:
+            pd.DataFrame: Similar table pairs with similarity scores
+        """
+        import pandas as pd
+        from sklearn.metrics.pairwise import cosine_similarity
+        
+        # Fast cosine similarity computation
+        sim_matrix = cosine_similarity(embeddings)
+        
+        # Extract top-k similar pairs
+        results = []
+        n_tables = len(table_names)
+        
+        for idx in range(n_tables):
+            # Get similarity scores for this table
+            similarities = sim_matrix[idx]
+            
+            # Get top-k indices (excluding self)
+            # Set self-similarity to -1 to exclude
+            similarities[idx] = -1
+            top_indices = np.argsort(similarities)[-(top_k):][::-1]
+            
+            for sim_idx in top_indices:
+                score = float(similarities[sim_idx])
+                if score >= threshold:
+                    results.append({
+                        'source_table': table_names[idx],
+                        'target_table': table_names[sim_idx],
+                        'similarity_score': score
+                    })
+        
+        return pd.DataFrame(results)
+    
+    def find_similar_tables_faiss(
+        self,
+        embeddings: np.ndarray,
+        table_names: List[str],
+        top_k: int = 5
+    ) -> "pd.DataFrame":
+        """
+        Use FAISS for ultra-fast similarity search (for very large datasets).
+        
+        Args:
+            embeddings: Numpy array of embeddings (N x dim)
+            table_names: List of table names
+            top_k: Number of top similar tables to return per table
+            
+        Returns:
+            pd.DataFrame: Similar table pairs with similarity scores
+            
+        Note: Requires faiss-cpu or faiss-gpu package
+        """
+        import pandas as pd
+        import faiss
+        
+        # Normalize embeddings for cosine similarity
+        embeddings_normalized = embeddings / np.linalg.norm(embeddings, axis=1, keepdims=True)
+        embeddings_normalized = embeddings_normalized.astype('float32')
+        
+        # Build FAISS index
+        dim = embeddings.shape[1]
+        index = faiss.IndexFlatIP(dim)  # Inner Product (cosine after normalization)
+        index.add(embeddings_normalized)
+        
+        # Search
+        distances, indices = index.search(embeddings_normalized, top_k + 1)
+        
+        results = []
+        for idx in range(len(table_names)):
+            for k in range(1, top_k + 1):  # Skip first (self)
+                sim_idx = indices[idx, k]
+                score = float(distances[idx, k])
+                results.append({
+                    'source_table': table_names[idx],
+                    'target_table': table_names[sim_idx],
+                    'similarity_score': score
+                })
+        
+        return pd.DataFrame(results)
+    
+    def analyze_pandas_df(
+        self,
+        pdf: "pd.DataFrame",
+        embedding_col: str = 'embedding',
+        name_col: str = 'full_table_name',
+        usage_col: str = 'usage_score',
+        top_k: int = 5
+    ) -> Tuple["pd.DataFrame", "pd.DataFrame"]:
+        """
+        Full analysis pipeline for pandas DataFrame.
+        
+        Args:
+            pdf: Pandas DataFrame with embeddings
+            embedding_col: Column name for embeddings
+            name_col: Column name for table names
+            usage_col: Column name for usage score
+            top_k: Number of top similar tables
+            
+        Returns:
+            Tuple[pd.DataFrame, pd.DataFrame]: 
+                - Visualization DataFrame (with vis_x, vis_y, usage_score)
+                - Similarity DataFrame (source, target, score)
+        """
+        import pandas as pd
+        
+        # Extract data
+        embeddings = np.stack(pdf[embedding_col].values)
+        table_names = pdf[name_col].tolist()
+        
+        # 1. Compute UMAP coordinates
+        viz_df = self.compute_umap_coordinates(embeddings, table_names)
+        
+        # Add usage score if available
+        if usage_col in pdf.columns:
+            usage_map = pdf.set_index(name_col)[usage_col].to_dict()
+            viz_df['usage_score'] = viz_df['full_table_name'].map(usage_map)
+        
+        # 2. Compute similarity
+        sim_df = self.compute_fast_similarity(embeddings, table_names, top_k=top_k)
+        
+        return viz_df, sim_df

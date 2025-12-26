@@ -9,3 +9,4 @@ scratch/**
 
 .databricks
 .DS_Store
+doc/*
